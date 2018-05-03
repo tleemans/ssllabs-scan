@@ -51,7 +51,7 @@ const (
 	LOG_TRACE    = 8
 )
 
-var USER_AGENT = "ssllabs-scan v1.4.0 (stable $Id$)"
+var USER_AGENT = "ssllabs-scan v1.4.1 (stable $Id$)"
 
 var logLevel = LOG_NOTICE
 
@@ -63,6 +63,9 @@ var currentAssessments = -1
 
 // The maximum number of assessments we can have in progress at any one time.
 var maxAssessments = -1
+
+// The hard cap on the number of concurrent assessments
+var capAssessments = -1
 
 var requestCounter uint64 = 0
 
@@ -787,7 +790,7 @@ func (manager *Manager) run() {
 			}
 
 			if moreAssessments {
-				if currentAssessments < maxAssessments {
+				if currentAssessments < maxAssessments && ( capAssessments == 0 || ( capAssessments > 0 && activeAssessments < capAssessments )) {
 					host, hasNext := manager.hostProvider.next()
 					if hasNext {
 						manager.startAssessment(host)
@@ -938,6 +941,7 @@ func main() {
 	var conf_quiet = flag.Bool("quiet", false, "Disable status messages (logging)")
 	var conf_usecache = flag.Bool("usecache", false, "If true, accept cached results (if available), else force live scan.")
 	var conf_maxage = flag.Int("maxage", 0, "Maximum acceptable age of cached results, in hours. A zero value is ignored.")
+	var conf_cap = flag.Int("cap", 0, "Capped amount of concurrent assessments. A zero value is ignored.")
 	var conf_verbosity = flag.String("verbosity", "info", "Configure log verbosity: error, notice, info, debug, or trace.")
 	var conf_version = flag.Bool("version", false, "Print version and API location information and exit")
 
@@ -965,6 +969,10 @@ func main() {
 
 	if *conf_maxage != 0 {
 		globalMaxAge = *conf_maxage
+	}
+
+	if *conf_cap != 0 {
+	        capAssessments = *conf_cap
 	}
 
 	// Verify that the API entry point is a URL.
