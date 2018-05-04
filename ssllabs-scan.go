@@ -790,7 +790,7 @@ func (manager *Manager) run() {
 			}
 
 			if moreAssessments {
-				if currentAssessments < maxAssessments && ( capAssessments == 0 || ( capAssessments > 0 && activeAssessments < capAssessments )) {
+				if currentAssessments < maxAssessments && ( capAssessments <= 0 || ( capAssessments > 0 && activeAssessments < capAssessments )) {
 					host, hasNext := manager.hostProvider.next()
 					if hasNext {
 						manager.startAssessment(host)
