@@ -20,7 +20,7 @@
 package main
 
 import "crypto/tls"
-import "errors"
+// import "errors"
 import "encoding/json"
 import "flag"
 import "fmt"
@@ -51,7 +51,7 @@ const (
 	LOG_TRACE    = 8
 )
 
-var USER_AGENT = "ssllabs-scan v1.4.1 (stable $Id$)"
+var USER_AGENT = "ssllabs-scan v1.4.2 (stable $Id$)"
 
 var logLevel = LOG_NOTICE
 
@@ -64,14 +64,17 @@ var currentAssessments = -1
 // The maximum number of assessments we can have in progress at any one time.
 var maxAssessments = -1
 
-// The hard cap on the number of concurrent assessments
+// The maximum number of assessments we can have in progress at any one time.
+var extraWait int64 = 0
+
+// The number of assessments that is used as hard cap
 var capAssessments = -1
 
 var requestCounter uint64 = 0
 
 var apiLocation = "https://api.ssllabs.com/api/v2"
 
-var globalNewAssessmentCoolOff int64 = 1100
+var globalNewAssessmentCoolOff int64 = 1100 + extraWait
 
 var globalIgnoreMismatch = false
 
@@ -357,6 +360,13 @@ func invokeGetRepeatedly(url string) (*http.Response, []byte, error) {
 	for {
 		var reqId = atomic.AddUint64(&requestCounter, 1)
 
+		if extraWait > 0 {
+			if logLevel >= LOG_DEBUG {
+				log.Printf("[DEBUG] Request waiting %d", extraWait)
+			}
+			<-time.NewTimer(time.Duration(extraWait) * time.Millisecond).C
+		}
+
 		if logLevel >= LOG_DEBUG {
 			log.Printf("[DEBUG] Request #%v: %v", reqId, url)
 		}
@@ -482,13 +492,11 @@ func invokeApi(command string) (*http.Response, []byte, error) {
 
 		// Status codes 429, 503, and 529 essentially mean try later. Thus,
 		// if we encounter them, we sleep for a while and try again.
-		if resp.StatusCode == 429 {
-			return resp, body, errors.New("Assessment failed: 429")
-		} else if (resp.StatusCode == 503) || (resp.StatusCode == 529) {
+		if (resp.StatusCode == 429) || (resp.StatusCode == 503) || (resp.StatusCode == 529) {
 			// In case of the overloaded server, randomize the sleep time so
 			// that some clients reconnect earlier and some later.
 
-			sleepTime := 15 + rand.Int31n(15)
+			sleepTime := 5 + rand.Int31n(15)
 
 			if logLevel >= LOG_NOTICE {
 				log.Printf("[NOTICE] Sleeping for %v minutes after a %v response", sleepTime, resp.StatusCode)
@@ -717,7 +725,7 @@ func (manager *Manager) run() {
 	moreAssessments := true
 
 	if labsInfo.NewAssessmentCoolOff >= 1000 {
-		globalNewAssessmentCoolOff = 100 + labsInfo.NewAssessmentCoolOff
+		globalNewAssessmentCoolOff = 100 + labsInfo.NewAssessmentCoolOff + extraWait
 	} else {
 		if logLevel >= LOG_WARNING {
 			log.Printf("[WARNING] Info.NewAssessmentCoolOff too small: %v", labsInfo.NewAssessmentCoolOff)
@@ -725,6 +733,12 @@ func (manager *Manager) run() {
 	}
 
 	for {
+		if extraWait > 0 {
+			if logLevel >= LOG_DEBUG {
+				log.Printf("[DEBUG] Manager waiting %d", extraWait)
+			}
+			<-time.NewTimer(time.Duration(extraWait) * time.Millisecond).C
+		}
 		select {
 		// Handle assessment events (e.g., starting and finishing).
 		case e := <-manager.BackendEventChannel:
@@ -942,6 +956,7 @@ func main() {
 	var conf_usecache = flag.Bool("usecache", false, "If true, accept cached results (if available), else force live scan.")
 	var conf_maxage = flag.Int("maxage", 0, "Maximum acceptable age of cached results, in hours. A zero value is ignored.")
 	var conf_cap = flag.Int("cap", 0, "Capped amount of concurrent assessments. A zero value is ignored.")
+	var conf_wait = flag.Int64("wait", 0, "Extra amount of milliseconds to wait between requests to prevent 429's.")
 	var conf_verbosity = flag.String("verbosity", "info", "Configure log verbosity: error, notice, info, debug, or trace.")
 	var conf_version = flag.Bool("version", false, "Print version and API location information and exit")
 
@@ -973,6 +988,10 @@ func main() {
 
 	if *conf_cap != 0 {
 	        capAssessments = *conf_cap
+	}
+
+	if *conf_wait != 0 {
+	        extraWait = *conf_wait
 	}
 
 	// Verify that the API entry point is a URL.
